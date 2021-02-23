@@ -16,6 +16,12 @@ nlp = spacy.load('en_core_web_sm')
 def get_train_set(data_folder, inputfile, subtask):
     """
     Read training file
+    :param:
+    data_folder: folder contains the raw data
+    inputfile: name of the input file
+    subtask: either "a" or "b", else get a warning
+    
+    Return path to train data and the folder contains the train data
     """
     train_folder = data_folder+"_subtask"+subtask
     if not os.path.isdir(train_folder):
@@ -81,6 +87,9 @@ def save_vocab(TWEET, vocab_file):
     return vocab_file
 
 def prepare_data(data_folder, train_file,test_file, device):
+    """
+    Prepare data into tensors using texttorch.
+    """
     TWEET = data.Field(sequential=True,tokenize = 'spacy',
                   tokenizer_language = 'en_core_web_sm',lower=True, include_lengths=True)
     LABEL = data.LabelField(dtype = torch.float)
@@ -109,7 +118,7 @@ def prepare_data(data_folder, train_file,test_file, device):
 
     train_iterator, test_iterator = data.BucketIterator.splits( 
         (train_set, test_set),
-        sort_key = lambda x: len(x.tweet), #sort by s attribute (quote)
+        sort_key = lambda x: len(x.tweet),
         batch_size=BATCH_SIZE, device=device)
 
     print(vars(list(train_iterator)[0]))
@@ -123,10 +132,7 @@ def prepare_data(data_folder, train_file,test_file, device):
 class LSTM(nn.Module):
     def __init__(self, vocab_size, embedding_dim, hidden_dim, output_dim, n_layers, 
                  bidirectional, dropout, pad_idx):
-        
         super().__init__()
-        
-
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx = pad_idx)
         self.lstm = nn.LSTM(embedding_dim,
                             hidden_dim,
@@ -138,8 +144,7 @@ class LSTM(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         
-    def forward(self, text, text_lengths):
-        
+    def forward(self, text, text_lengths):  
         embedded = self.embedding(text)
         packed_embedded = pack_padded_sequence(embedded, text_lengths.to('cpu'),enforce_sorted=False)
         packed_output, (hidden, cell) = self.lstm(packed_embedded)
@@ -152,66 +157,44 @@ class LSTM(nn.Module):
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-
 def binary_accuracy(preds, y):
     """
     Returns accuracy per batch, i.e. if you get 8/10 right, this returns 0.8, NOT 8
     """
-    #round predictions to the closest integer
     rounded_preds = torch.round(torch.sigmoid(preds))
-    correct = (rounded_preds == y).float() #convert into float for division 
+    correct = (rounded_preds == y).float()
     accuracy = correct.sum() / len(correct)
     return accuracy
 
-def train(model, iterator, loss_funct):
-    
+def train(model, iterator, loss_funct):   
     optimizer = optim.Adam(model.parameters())
-    
     epoch_loss = 0
     epoch_acc = 0
-    
     model.train()
     
-    for batch in tqdm(iterator):
-        
+    for batch in tqdm(iterator):  
         optimizer.zero_grad()
-        
         text, text_lengths = batch.tweet
-        
         predictions = model(text, text_lengths).squeeze(1)
-        
         loss = loss_funct(predictions, batch.label)
-        
         acc = binary_accuracy(predictions, batch.label)
-        
         loss.backward()
-        
         optimizer.step()
-        
         epoch_loss += loss.item()
         epoch_acc += acc.item()
         
     return epoch_loss / len(iterator), epoch_acc / len(iterator)
 
 def evaluate(model, iterator, loss_funct):
-    
     epoch_loss = 0
     epoch_acc = 0
-    
     model.eval()
-    
     with torch.no_grad():
-    
         for batch in iterator:
-
-            text, text_lengths = batch.tweet
-            
-            predictions = model(text, text_lengths).squeeze(1)
-            
-            loss = loss_funct(predictions, batch.label)
-            
+            text, text_lengths = batch.tweet           
+            predictions = model(text, text_lengths).squeeze(1)           
+            loss = loss_funct(predictions, batch.label)          
             acc = binary_accuracy(predictions, batch.label)
-
             epoch_loss += loss.item()
             epoch_acc += acc.item()
         
@@ -225,12 +208,9 @@ def epoch_time(start_time, end_time):
 
 
 def main(data_folder, subtask, lstm_model_path, device, N_EPOCHS = 4):
-
     data_file = data_folder + "/olid-training-v1.0.tsv"
-
     train_data_folder, train_file = get_train_set(data_folder, data_file, subtask)
     test_file = get_test_set(data_folder,train_data_folder, subtask)
-
     train_dataloader, test_dataloader, TWEET, LABEL = prepare_data(train_data_folder, train_file,test_file, device)
 
     INPUT_DIM = len(TWEET.vocab)
@@ -253,15 +233,12 @@ def main(data_folder, subtask, lstm_model_path, device, N_EPOCHS = 4):
     model.to(device)
 
     pretrained_embeddings = TWEET.vocab.vectors
-
     print(pretrained_embeddings.shape)
+
     model.embedding.weight.data.copy_(pretrained_embeddings)
-
     UNK_IDX = TWEET.vocab.stoi[TWEET.unk_token]
-
     model.embedding.weight.data[UNK_IDX] = torch.zeros(EMBEDDING_DIM)
     model.embedding.weight.data[PAD_IDX] = torch.zeros(EMBEDDING_DIM)
-
     print(model.embedding.weight.data)
 
     print(f'The model has {count_parameters(model):,} trainable parameters')
@@ -272,14 +249,10 @@ def main(data_folder, subtask, lstm_model_path, device, N_EPOCHS = 4):
     best_test_loss = float('inf')
 
     for epoch in range(N_EPOCHS):
-
         start_time = time.time()
-    
         train_loss, train_acc = train(model, train_dataloader, loss_funct)
         test_loss, test_acc = evaluate(model, test_dataloader, loss_funct)
-    
         end_time = time.time()
-
         epoch_mins, epoch_secs = epoch_time(start_time, end_time)
     
         if test_loss < best_test_loss:
